@@ -117,8 +117,8 @@ You can read it from [GitHub Wiki](https://github.com/MatrixTM/MHDDoS/wiki)
 **Clone**
 
 ```shell script
-git clone https://github.com/MatrixTM/MHDDoS.git
-cd MHDDoS
+https://github.com/Enex-kblm/MH-DDoS.git
+cd MH-DDoS
 ```
 
 **Make venv**
