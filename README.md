@@ -117,7 +117,7 @@ You can read it from [GitHub Wiki](https://github.com/MatrixTM/MHDDoS/wiki)
 **Clone**
 
 ```shell script
-https://github.com/Enex-kblm/MH-DDoS.git
+git clone https://github.com/Enex-kblm/MH-DDoS.git
 cd MH-DDoS
 ```
 
